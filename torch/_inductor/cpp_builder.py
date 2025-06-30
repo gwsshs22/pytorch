@@ -28,8 +28,9 @@ from torch._dynamo.utils import dynamo_timed
 from torch._inductor import config, exc
 from torch._inductor.cpu_vec_isa import invalid_vec_isa, VecISA
 from torch._inductor.runtime.runtime_utils import cache_dir
-from torch.torch_version import TorchVersion
 from torch._inductor.utils import aoti_model_name_from_config
+from torch.torch_version import TorchVersion
+
 
 if config.is_fbcode():
     from triton.fb.build import _run_build_command, build_paths
@@ -1730,7 +1731,9 @@ class CppBuilder:
         """
 
         definitions = " ".join(self._build_option.get_definitions())
-        target_library_type = "STATIC" if config.aot_inductor.compile_standalone else "SHARED"
+        target_library_type = (
+            "STATIC" if config.aot_inductor.compile_standalone else "SHARED"
+        )
 
         contents = textwrap.dedent(
             f"""

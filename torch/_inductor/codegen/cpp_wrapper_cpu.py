@@ -22,7 +22,13 @@ from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.symbol import symbol_is_type, SymT
 
 from .. import config, ir
-from ..utils import _align, DeferredLineBase, LineContext, normalize_name, aoti_model_name_from_config
+from ..utils import (
+    _align,
+    aoti_model_name_from_config,
+    DeferredLineBase,
+    LineContext,
+    normalize_name,
+)
 from ..virtualized import V
 from .aoti_hipify_utils import maybe_hipify_code_wrapper
 from .common import get_device_op_overrides, IndentedBuffer, Kernel
@@ -215,7 +221,9 @@ class CppWrapperCpu(PythonWrapperCodegen):
         if V.graph.aot_mode:
             if not config.aot_inductor.compile_standalone:
                 with open(
-                    os.path.join(os.path.dirname(__file__), "aoti_runtime", "interface.cpp")
+                    os.path.join(
+                        os.path.dirname(__file__), "aoti_runtime", "interface.cpp"
+                    )
                 ) as f:
                     self.header.splice(f.read())
             else:
