@@ -161,8 +161,9 @@ class TestAOTInductorPackage(TestCase):
                 ["cmake", ".."],
                 cwd=build_path,
                 env=custom_env,
+                check=True,
             )
-            subprocess.run(["make"], cwd=build_path)
+            subprocess.run(["make"], cwd=build_path, check=True)
         return build_path, tmp_path
 
     def test_add(self):
@@ -335,6 +336,22 @@ class TestAOTInductorPackage(TestCase):
             )
             model = Model().to(device=self.device)
 
+            # Test compilation when no name is passed in
+            options = {
+                "aot_inductor.package_cpp_only": self.package_cpp_only,
+                "aot_inductor.compile_standalone": True,
+            }
+            with (
+                tempfile.TemporaryDirectory() as tmp_dir,
+            ):
+                build_path, _ = self.cmake_compile(
+                    model, example_inputs, options, tmp_dir
+                )
+                # Check if the .a file was build successfully
+                a_path = build_path / "libaoti_model.a"
+                self.assertTrue(a_path.exists())
+
+            # Test compilation when model name is passed in
             options = {
                 "aot_inductor.package_cpp_only": self.package_cpp_only,
                 "aot_inductor.compile_standalone": True,
@@ -349,6 +366,15 @@ class TestAOTInductorPackage(TestCase):
                 # Check if the .a file was build successfully
                 a_path = build_path / "liblinear.a"
                 self.assertTrue(a_path.exists())
+
+            # test invalid model name
+            options = {
+                "aot_inductor.package_cpp_only": self.package_cpp_only,
+                "aot_inductor.compile_standalone": True,
+                "aot_inductor.model_name_for_generated_files": "linear/linear",
+            }
+            with self.assertRaisesRegex(Exception, "Invalid AOTI model name"):
+                self.cmake_compile(model, example_inputs, options, "")
 
     @unittest.skipIf(IS_FBCODE, "cmake won't work in fbcode")
     @skipIfRocm  # doesn't support multi-arch binary
