@@ -12,17 +12,17 @@ class AOTInductorModelClassNamePlaceholder : public AOTInductorModelBase<AOTIndu
        std::shared_ptr<std::vector<ConstantHandle>> constants_array,
        const std::string& device_str,
        std::optional<std::string> cubin_dir);
- 
+
    std::unordered_map<std::string, AtenTensorHandle> const_run_impl(
        DeviceStreamType stream,
        AOTIProxyExecutorHandle proxy_executor,
        bool initialization = false);
- 
+
    void _const_run_impl(
        std::vector<AtenTensorHandle>& output_handles,
        DeviceStreamType stream,
        AOTIProxyExecutorHandle proxy_executor);
- 
+
    void run_impl(
        AtenTensorHandle*
            input_handles, // array of input AtenTensorHandle; handles
@@ -33,13 +33,13 @@ class AOTInductorModelClassNamePlaceholder : public AOTInductorModelBase<AOTIndu
                            // borrowed
        DeviceStreamType stream,
        AOTIProxyExecutorHandle proxy_executor);
- 
+
    template <typename Inputs, typename Outputs>
    Outputs run_impl_minimal_arrayref_interface(
        const Inputs& inputs,
        DeviceStreamType stream,
        AOTIProxyExecutorHandle proxy_executor);
- 
+
    static std::unique_ptr<AOTInductorModelClassNamePlaceholder> Create(
        std::shared_ptr<ConstantMap> constants_map,
        std::shared_ptr<std::vector<ConstantHandle>> constants_array,
@@ -51,7 +51,7 @@ class AOTInductorModelClassNamePlaceholder : public AOTInductorModelBase<AOTIndu
          device_str,
          std::move(cubin_dir));
    }
- 
+
   private:
    std::unique_ptr<AOTInductorModelKernelsBase> kernels_;
  };
