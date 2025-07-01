@@ -653,6 +653,19 @@ class _TorchDynamoContext:
         def get_compiler_config():
             return self.compiler_config
 
+        from .package import DynamoCache, LazyCompilePackage
+
+        # If self._package is lazily initialized, we should check the dynamo cache now
+        if config.caching_precompile and isinstance(self._package, LazyCompilePackage):
+            result = DynamoCache.load(fn)
+            if result is None:
+                # Create a fresh CompilePackage
+                self._package._initialize(fn, None)
+            else:
+                cache_entry, backends = result
+                self._package._initialize(fn, cache_entry)
+                self._package.install(backends)
+
         fn = innermost_fn(fn)
 
         # add context containing GraphModule to any GraphModule forward functions
@@ -1150,8 +1163,20 @@ def _optimize(
     # The backend function is stashed in the callable returned by
     # _optimize_catch_errors in the field _torchdynamo_orig_callable. This can
     # be used by eval_frame.c to insert a guard on the backend.
+
+    # With CachingPrecompile, lazily initialize a CompilePackage
+    # which gets set by _optimize_catch_errors.__call__ once we have a function
+    if config.caching_precompile and package is None:
+        from .package import LazyCompilePackage
+
+        package = LazyCompilePackage(fn=None, dynamo=None)
+
     return _optimize_catch_errors(
-        convert_frame.convert_frame(backend, hooks, package=package),
+        convert_frame.convert_frame(
+            backend,
+            hooks,
+            package=package,
+        ),
         hooks,
         backend_ctx_ctor,
         error_on_graph_break=nopython,
@@ -2045,6 +2070,7 @@ def optimize_assert(*args, **kwargs):
     return _optimize_assert(rebuild_ctx, *args, **kwargs)
 
 
+# torch._dynamo.optimize(package=package)
 def _optimize_assert(
     rebuild_ctx: Callable[[], OptimizeContext],
     backend,
@@ -2066,6 +2092,16 @@ def _optimize_assert(
 
     # Find if backend has any extra context manager
     backend_ctx_ctor = getattr(backend, "backend_ctx_ctor", null_context)
+
+    if config.caching_precompile and package is None:
+        # Initialize a lazy package that will be set/filled by
+        # _OptimizeContext.__call__
+        # We need to initialize it here because the same CompilePackage
+        # needs to be shared between convert_frame_assert
+        # and OptimizeContext.
+        from .package import LazyCompilePackage
+
+        package = LazyCompilePackage(None, None)
 
     return _optimize_catch_errors(
         convert_frame.convert_frame_assert(
