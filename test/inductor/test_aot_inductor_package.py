@@ -131,6 +131,10 @@ class TestAOTInductorPackage(TestCase):
         return compiled_model
 
     def check_package_cpp_only(self: TestCase) -> None:
+        """
+        Check if cmake and make are available.
+        Skip self.package_cpp_only=False tests
+        """
         if not self.package_cpp_only:
             raise unittest.SkipTest("Only meant to test cpp package")
         if shutil.which("cmake") is None:
@@ -139,6 +143,14 @@ class TestAOTInductorPackage(TestCase):
             raise unittest.SkipTest("make is not available")
 
     def cmake_compile(self, model, example_inputs, options, tmp_dir):
+        """
+        Exports model, compiles it using AOTInductor, extracts the
+        generated files to tmp_dir, and builds the C++ code using CMake and Make.
+
+        Returns:
+            - build_path (Path): Path to the CMake build directory containing the compiled binary.
+            - tmp_path (Path): Path to the extracted model source directory.
+        """
         ep = torch.export.export(model, example_inputs)
         package_path = torch._inductor.aoti_compile_and_package(
             ep, inductor_configs=options

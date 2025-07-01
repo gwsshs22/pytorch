@@ -44,8 +44,6 @@ int main(int argc, char* argv[]) {
     auto tensor3 = torch::ones({10, 10}, device);
     auto tensor4 = torch::ones({10, 10}, device);
 
-    // std::cout << "Input tensor 1: " << tensor1 << std::endl;
-    // std::cout << "Input tensor 2: " << tensor2 << std::endl;
     std::vector<at::Tensor> input_tensors = {tensor1, tensor2};
     std::vector<at::Tensor> input_tensors2 = {tensor3, tensor4};
 
