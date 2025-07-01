@@ -1,3 +1,5 @@
+# Owner(s): ["module: inductor"]
+from torch.testing._internal.common_utils import run_tests
 
 
 def get_static_linkage_main_cpp_file():
@@ -88,7 +90,7 @@ int main(int argc, char* argv[]) {
     auto output_tensor2 =
         torch::aot_inductor::alloc_tensors_by_stealing_from_handles(
             &output_handle2, 1);
-    
+
     if (!(torch::all(output_tensor1[0] == 2).item<bool>())){
       std::cout << "Wrong Output for Plus Model: " << output_tensor1 << std::endl;
       throw std::runtime_error("Tensor does not contain only the expected value 2.");
@@ -105,6 +107,7 @@ int main(int argc, char* argv[]) {
   }
 }
 """
+
 
 def get_static_linkage_makelist_file():
     return """
@@ -129,3 +132,7 @@ target_link_libraries(main PRIVATE torch cuda
                     Plus
                     Minus)
     """
+
+
+if __name__ == "__main__":
+    run_tests()
