@@ -2136,26 +2136,36 @@ class AotCodeCompiler:
                 cubin_file = value[get_cpp_wrapper_cubin_path_name()]
                 if config.aot_inductor.emit_multi_arch_kernel and device_type == "cuda":
                     current_arch = _nvcc_arch_as_compile_option()
-                    cmd = (
-                        f"{_cuda_compiler()} -fatbin {asm_file} -o {cubin_file} "
-                        # Triton only allows generating PTX version as same as the current arch
-                        f"-gencode arch=compute_{current_arch},code=compute_{current_arch} "
-                        # Include SASS for the current specific arch
-                        f"-gencode arch=compute_{current_arch},code=sm_{current_arch} "
-                    )
-                    try:
-                        subprocess.run(
-                            cmd.split(),
-                            capture_output=True,
-                            text=True,
-                            check=True,
+                    with (
+                        tempfile.NamedTemporaryFile(suffix=".ptx") as tmp_asm_file,
+                        tempfile.NamedTemporaryFile(
+                            suffix=".fatbin"
+                        ) as tmp_fatbin_file,
+                    ):
+                        # When running in certain CI environment, nvcc will choke here.
+                        # Creating a clone asm_file to see if it can fix the problem.
+                        shutil.copyfile(asm_file, tmp_asm_file.name)
+                        cmd = (
+                            f"{_cuda_compiler()} -fatbin {tmp_asm_file.name} -o {tmp_fatbin_file.name} "
+                            # Triton only allows generating PTX version as same as the current arch
+                            f"-gencode arch=compute_{current_arch},code=compute_{current_arch} "
+                            # Include SASS for the current specific arch
+                            f"-gencode arch=compute_{current_arch},code=sm_{current_arch} "
                         )
-                    except subprocess.CalledProcessError as e:
-                        print(
-                            f"{cmd} failed with:\nstdout:\n{e.stdout}\nstderr:\n{e.stderr}",
-                            file=sys.stderr,
-                        )
-                        raise
+                        try:
+                            subprocess.run(
+                                cmd.split(),
+                                capture_output=True,
+                                text=True,
+                                check=True,
+                            )
+                            shutil.copyfile(tmp_fatbin_file.name, cubin_file)
+                        except subprocess.CalledProcessError as e:
+                            print(
+                                f"{cmd} failed with:\nstdout:\n{e.stdout}\nstderr:\n{e.stderr}",
+                                file=sys.stderr,
+                            )
+                            raise
 
                 if config.aot_inductor.embed_kernel_binary:
                     # Embed cubin files into model.so using objcopy
