@@ -244,6 +244,7 @@ if sys.platform == "win32" and sys.maxsize.bit_length() == 31:
 import platform
 
 
+# Also update `project.requires-python` in pyproject.toml when changing this
 python_min_version = (3, 9, 0)
 python_min_version_str = ".".join(map(str, python_min_version))
 if sys.version_info < python_min_version:
@@ -272,6 +273,28 @@ import setuptools.command.sdist
 import setuptools.errors
 from setuptools import Command, Extension, find_packages, setup
 from setuptools.dist import Distribution
+
+
+CWD = Path(__file__).absolute().parent
+
+# Add the current directory to the Python path so that we can import `tools`.
+# This is required when running this script with a PEP-517-enabled build backend.
+#
+# From the PEP-517 documentation: https://peps.python.org/pep-0517
+#
+# > When importing the module path, we do *not* look in the directory containing
+# > the source tree, unless that would be on `sys.path` anyway (e.g. because it
+# > is specified in `PYTHONPATH`).
+#
+sys.path.insert(0, str(CWD))  # this only affects the current process
+# Add the current directory to PYTHONPATH so that we can import `tools` in subprocesses
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    [
+        str(CWD),
+        os.getenv("PYTHONPATH", ""),
+    ]
+).rstrip(os.pathsep)
+
 from tools.build_pytorch_libs import build_pytorch
 from tools.generate_torch_version import get_torch_version
 from tools.setup_helpers.cmake import CMake, CMakeValue
@@ -364,8 +387,8 @@ RUN_BUILD_DEPS = True
 # see if the user passed a quiet flag to setup.py arguments and respect
 # that in our parts of the build
 EMIT_BUILD_WARNING = False
-RERUN_CMAKE = str2bool(os.getenv("CMAKE_FRESH"))
-CMAKE_ONLY = str2bool(os.getenv("CMAKE_ONLY"))
+RERUN_CMAKE = str2bool(os.environ.pop("CMAKE_FRESH", None))
+CMAKE_ONLY = str2bool(os.environ.pop("CMAKE_ONLY", None))
 filtered_args = []
 for i, arg in enumerate(sys.argv):
     if arg == "--cmake":
@@ -407,7 +430,6 @@ else:
     setuptools.distutils.log.warn = report  # type: ignore[attr-defined]
 
 # Constant known variables used throughout this file
-CWD = Path(__file__).absolute().parent
 TORCH_DIR = CWD / "torch"
 TORCH_LIB_DIR = TORCH_DIR / "lib"
 THIRD_PARTY_DIR = CWD / "third_party"
@@ -1127,10 +1149,15 @@ def configure_extension_build() -> tuple[
     ################################################################################
 
     ext_modules: list[Extension] = []
+    # packages that we want to install into site-packages and include them in wheels
+    includes = ["torch", "torch.*", "torchgen", "torchgen.*"]
+    # exclude folders that they look like Python packages but are not wanted in wheels
     excludes = ["tools", "tools.*", "caffe2", "caffe2.*"]
-    if not cmake_cache_vars["BUILD_FUNCTORCH"]:
+    if cmake_cache_vars["BUILD_FUNCTORCH"]:
+        includes.extend(["functorch", "functorch.*"])
+    else:
         excludes.extend(["functorch", "functorch.*"])
-    packages = find_packages(exclude=excludes)
+    packages = find_packages(include=includes, exclude=excludes)
     C = Extension(
         "torch._C",
         libraries=main_libraries,
@@ -1219,7 +1246,7 @@ def main() -> None:
     ]
 
     if BUILD_PYTHON_ONLY:
-        install_requires.append(f"{LIBTORCH_PKG_NAME}=={get_torch_version()}")
+        install_requires.append(f"{LIBTORCH_PKG_NAME}=={TORCH_VERSION}")
 
     if str2bool(os.getenv("USE_PRIORITIZED_TEXT_FOR_LD")):
         gen_linker_script(
@@ -1249,7 +1276,7 @@ def main() -> None:
     try:
         dist.parse_command_line()
     except setuptools.errors.BaseError as e:
-        print(e)
+        print(e, file=sys.stderr)
         sys.exit(1)
 
     mirror_files_into_torchgen()
@@ -1265,16 +1292,6 @@ def main() -> None:
     ) = configure_extension_build()
     install_requires += extra_install_requires
 
-    extras_require = {
-        "optree": ["optree>=0.13.0"],
-        "opt-einsum": ["opt-einsum>=3.3"],
-        "pyyaml": ["pyyaml"],
-    }
-
-    # Read in README.md for our long_description
-    long_description = (CWD / "README.md").read_text(encoding="utf-8")
-
-    version_range_max = max(sys.version_info[1], 13) + 1
     torch_package_data = [
         "py.typed",
         "bin/*",
@@ -1362,9 +1379,11 @@ def main() -> None:
     package_data = {
         "torch": torch_package_data,
     }
+    exclude_package_data = {}
 
     if not BUILD_LIBTORCH_WHL:
         package_data["torchgen"] = torchgen_package_data
+        exclude_package_data["torchgen"] = ["*.py[co]"]
     else:
         # no extensions in BUILD_LIBTORCH_WHL mode
         ext_modules = []
@@ -1372,47 +1391,16 @@ def main() -> None:
     setup(
         name=TORCH_PACKAGE_NAME,
         version=TORCH_VERSION,
-        description=(
-            "Tensors and Dynamic neural networks in Python with strong GPU acceleration"
-        ),
-        long_description=long_description,
-        long_description_content_type="text/markdown",
         ext_modules=ext_modules,
         cmdclass=cmdclass,
         packages=packages,
         entry_points=entry_points,
         install_requires=install_requires,
-        extras_require=extras_require,
         package_data=package_data,
-        # TODO fix later Manifest.IN file was previously ignored
-        include_package_data=False,  # defaults to True with pyproject.toml file
-        url="https://pytorch.org/",
-        download_url="https://github.com/pytorch/pytorch/tags",
-        author="PyTorch Team",
-        author_email="packages@pytorch.org",
-        python_requires=f">={python_min_version_str}",
-        # PyPI package information.
-        classifiers=[
-            "Development Status :: 5 - Production/Stable",
-            "Intended Audience :: Developers",
-            "Intended Audience :: Education",
-            "Intended Audience :: Science/Research",
-            "License :: OSI Approved :: BSD License",
-            "Topic :: Scientific/Engineering",
-            "Topic :: Scientific/Engineering :: Mathematics",
-            "Topic :: Scientific/Engineering :: Artificial Intelligence",
-            "Topic :: Software Development",
-            "Topic :: Software Development :: Libraries",
-            "Topic :: Software Development :: Libraries :: Python Modules",
-            "Programming Language :: C++",
-            "Programming Language :: Python :: 3",
-        ]
-        + [
-            f"Programming Language :: Python :: 3.{i}"
-            for i in range(python_min_version[1], version_range_max)
-        ],
-        license="BSD-3-Clause",
-        keywords="pytorch, machine learning",
+        exclude_package_data=exclude_package_data,
+        # Disable automatic inclusion of data files because we want to
+        # explicitly control with `package_data` above.
+        include_package_data=False,
     )
     if EMIT_BUILD_WARNING:
         print_box(build_update_message)
