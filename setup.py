@@ -266,6 +266,7 @@ import sysconfig
 import textwrap
 import time
 from collections import defaultdict
+from configparser import ConfigParser
 from pathlib import Path
 from typing import Any, ClassVar, IO
 
@@ -492,7 +493,89 @@ def get_submodule_folders() -> list[Path]:
         ]
 
 
-def check_submodules() -> None:
+def initialize_git_repository() -> None:
+    """Initialize the git repository if it does not already exist."""
+    if (CWD / ".git").exists():
+        # If the .git directory exists, we assume the repository is already
+        # initialized via a git clone.
+        return
+
+    report(" --- Initializing git repository")
+    commands = (
+        ["git", "init", "--initial-branch=main"],
+        ["git", "config", "user.name", "PyTorch MergeBot"],
+        ["git", "config", "user.email", "pytorchmergebot@users.noreply.github.com"],
+        ["git", "config", "advice.detachedHead", "false"],
+        ["git", "remote", "add", "origin", "https://github.com/pytorch/pytorch.git"],
+        ["git", "add", "--force", "--", ".gitignore", ".gitmodules"],
+    )
+    try:
+        for cmd in commands:
+            subprocess.check_call(cmd, cwd=CWD)
+    except subprocess.CalledProcessError as e:
+        report(f" --- Failed to initialize git repository: {e}")
+        sys.exit(1)
+
+    # We just initialized the git repository rather than using a clone, we need
+    # to add the submodules manually. Because `git submodule update --init` will
+    # not clone submodules if the submodules are not staged/committed in the
+    # fresh git history.
+    report(" --- Git repository initialized, now registering submodules")
+
+    start = time.perf_counter()
+    git_modules = ConfigParser()
+    git_modules.read([CWD / ".gitmodules"], encoding="utf-8")
+    try:
+        for section, submodule in git_modules.items():
+            if not section.startswith("submodule "):
+                continue
+            path = submodule["path"]
+            url = submodule["url"]
+            branch = submodule.get("branch")
+            report(f" --- Adding submodule {path} from {url}")
+            subprocess.check_call(["git", "submodule", "add", "--", url, path], cwd=CWD)
+            if branch:
+                # The branch name can be a branch or a tag.
+                # `git submodule add --branch <branch>` does not work with tags.
+                # So we need to checkout after adding the submodule to work with tags.
+                report(f" --- Checking out HEAD to {branch} for submodule {path}")
+                subprocess.check_call(["git", "checkout", branch], cwd=CWD / path)
+    except subprocess.CalledProcessError as e:
+        report(f" --- Failed to add submodules: {e}")
+        sys.exit(1)
+
+    try:
+        subprocess.check_call(
+            ["git", "commit", "--message", "Initial commit for building with SDist"],
+            cwd=CWD,
+        )
+    except subprocess.CalledProcessError as e:
+        report(f" --- Failed to initialize git repository: {e}")
+        sys.exit(1)
+
+    end = time.perf_counter()
+    report(f" --- Submodule registration took {end - start:.2f} sec")
+
+
+def initialize_git_submodules() -> None:
+    initialize_git_repository()
+
+    report(" --- Trying to initialize submodules")
+    start = time.perf_counter()
+    try:
+        subprocess.check_call(
+            ["git", "submodule", "update", "--init", "--recursive"], cwd=CWD
+        )
+    except Exception:
+        report(" --- Submodule initialization failed")
+        report("Please run:\n\tgit submodule update --init --recursive")
+        sys.exit(1)
+
+    end = time.perf_counter()
+    report(f" --- Submodule initialization took {end - start:.2f} sec")
+
+
+def ensure_git_submodules() -> None:
     def check_for_files(folder: Path, files: list[str]) -> None:
         if not any((folder / f).exists() for f in files):
             report("Could not find any of {} in {}".format(", ".join(files), folder))
@@ -506,21 +589,16 @@ def check_submodules() -> None:
 
     if str2bool(os.getenv("USE_SYSTEM_LIBS")):
         return
+
     folders = get_submodule_folders()
     # If none of the submodule folders exists, try to initialize them
     if all(not_exists_or_empty(folder) for folder in folders):
-        try:
-            report(" --- Trying to initialize submodules")
-            start = time.time()
-            subprocess.check_call(
-                ["git", "submodule", "update", "--init", "--recursive"], cwd=CWD
-            )
-            end = time.time()
-            report(f" --- Submodule initialization took {end - start:.2f} sec")
-        except Exception:
-            report(" --- Submodule initialization failed")
-            report("Please run:\n\tgit submodule update --init --recursive")
-            sys.exit(1)
+        report(
+            " --- No submodule folders found. Initializing git submodules "
+            "to ensure all dependencies are present."
+        )
+        initialize_git_submodules()
+
     for folder in folders:
         check_for_files(
             folder,
@@ -587,7 +665,7 @@ def mirror_files_into_torchgen() -> None:
 # all the work we need to do _before_ setup runs
 def build_deps() -> None:
     report(f"-- Building version {TORCH_VERSION}")
-    check_submodules()
+    ensure_git_submodules()
     check_pydep("yaml", "pyyaml")
     build_pytorch(
         version=TORCH_VERSION,
@@ -958,6 +1036,62 @@ class concat_license_files:
         self.f1.write_text(self.bsd_text, encoding="utf-8")
 
 
+class dump_git_submodule_hashes:
+    """Dump git submodule hashes to .gitmodules file"""
+
+    def __init__(self) -> None:
+        self.file = CWD / ".gitmodules"
+        self.content: str | None = None
+
+    def __enter__(self) -> None:
+        """Dump git submodule hashes to .gitmodules file"""
+        if not (CWD / ".git").exists() or not self.file.exists():
+            return
+
+        # Read the original content of the .gitmodules file so we can restore it later.
+        self.content = self.file.read_text(encoding="utf-8")
+
+        # Read the .gitmodules file and update it with commit hashes
+        # for submodules that do not have a branch specified.
+        git_modules = ConfigParser()
+        git_modules.read([self.file], encoding="utf-8")
+        for section, submodule in git_modules.items():
+            if not section.startswith("submodule "):
+                continue
+            if "branch" in submodule:
+                # If the submodule has a branch, we don't need to dump the hash
+                continue
+            path = submodule["path"]
+            try:
+                # Get the current commit hash of the submodule
+                commit_hash = (
+                    subprocess.check_output(
+                        ["git", "submodule", "status", "--", path],
+                        cwd=CWD,
+                        text=True,
+                        encoding="utf-8",
+                    )
+                    .strip()
+                    .partition(" ")[0]
+                    .lstrip("+-U")
+                )
+                # Update the .gitmodules file with the commit hash
+                submodule["branch"] = commit_hash
+            except subprocess.CalledProcessError as e:
+                report(f"Failed to get commit hash for submodule {path}: {e}")
+                continue
+
+        # Write the updated .gitmodules file
+        with self.file.open(mode="w", encoding="utf-8") as f:
+            git_modules.write(f)
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Restore content of .gitmodules file"""
+        if self.content:
+            # Restore the original content of the .gitmodules file
+            self.file.write_text(self.content, encoding="utf-8")
+
+
 try:
     from wheel.bdist_wheel import bdist_wheel  # type: ignore[import-untyped]
 except ImportError:
@@ -1021,7 +1155,7 @@ class clean(Command):
 
 class sdist(setuptools.command.sdist.sdist):
     def run(self) -> None:
-        with concat_license_files():
+        with dump_git_submodule_hashes(), concat_license_files():
             super().run()
 
 
